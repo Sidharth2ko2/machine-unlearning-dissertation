@@ -153,45 +153,115 @@ Retain size  : 45,000
 
 ---
 
-## Week 2 — Baseline Unlearning Methods (In Progress)
+## Week 2 — Baseline Unlearning Methods
 
 ### Goal
-Implement and evaluate three baseline unlearning methods from the paper and compare them using four standard metrics. This produces a results table equivalent to Table 1 in the paper before the paper's proposed DKF method is implemented.
+Implement and evaluate three baseline unlearning methods from the paper and compare them using four standard metrics. This produces a results table equivalent to Table 1 in the paper, establishing a performance baseline before implementing the paper's proposed DKF method.
 
-### Methods to Implement
+### Repository Restructure
+At the start of Week 2, the repo was reorganised from a flat structure into a week-by-week folder layout. Week 1 files were moved into `week1_baseline/` and `week2_unlearning/` was created as a clean folder. The `data/` and `checkpoints/` directories (gitignored) were also moved into `week1_baseline/`. Week 2's config points to Week 1's data to avoid re-downloading CIFAR-10.
 
-**1. Retrain (Gold Standard)**
-Train a completely fresh ResNet-18 from scratch, but only on the retain set D_r (45,000 images, no airplanes). This is the perfect unlearning reference — the model never saw airplane images, so it has no airplane knowledge by definition. Every other method is measured against how close it gets to this.
+### Method 1 — Retrain (Gold Standard)
+**What it does:** Discard the original model entirely. Train a completely new ResNet-18 from scratch, but only on the retain set D_r (45,000 images, no airplanes whatsoever).
 
-**2. Fine-tune**
-Take the original trained model (88.27%) and continue training it only on D_r. Without airplane images in the training loop, the model gradually overwrites its airplane knowledge. Fast and simple, but may not fully erase the forget class since the original weights still encode airplane features.
+**Why it is the gold standard:** A model that never saw airplane images cannot have any airplane knowledge. This is the theoretically perfect answer to machine unlearning. All other methods are measured by how closely they match this.
 
-**3. Negative Gradient (NegGrad)**
-Simultaneously apply gradient ascent on D_f (maximize loss on airplanes — actively degrade airplane classification) while applying normal gradient descent on D_r (preserve knowledge of the other 9 classes). More aggressive than fine-tuning but risks destabilizing the model if not balanced carefully.
+**The problem:** Takes as long as original training (~37 minutes). At industrial scale, this is infeasible — if 10,000 users request deletion in a day, you cannot retrain 10,000 times. This motivates approximate unlearning methods.
+
+**Implementation:** Fresh ResNet-18, SGD with cosine LR decay, trained 100 epochs on D_r only.
+
+---
+
+### Method 2 — Fine-tune
+**What it does:** Take the original trained model (88.27%) and continue training it on D_r only. No airplane images are ever shown during fine-tuning, so the model gradually overwrites its airplane representations.
+
+**Why it works partially:** The optimizer is pushing weights toward a solution that fits D_r. Over time, features that were specifically tuned for airplanes get repurposed for other classes.
+
+**Why it may be incomplete:** The original weights already contain airplane knowledge baked in. Fine-tuning does not explicitly erase those features — it just stops reinforcing them. Some residual airplane knowledge often remains detectable via MIA.
+
+**Implementation:** Same model weights as baseline, SGD at lower LR (0.01) for 10 epochs on D_r.
+
+---
+
+### Method 3 — Negative Gradient (NegGrad)
+**What it does:** Simultaneously perform two opposing updates in each training step:
+- **Gradient ascent on D_f** → Maximise the loss on airplane images (deliberately make the model worse at airplanes)
+- **Gradient descent on D_r** → Minimise the loss on retain images (keep the model good at the other 9 classes)
+
+**Combined loss:** `L = L_retain - α × L_forget`
+
+where `α = 0.5` controls the balance. A higher α means more aggressive forgetting but risks destabilising the overall model. Gradient clipping (`max_norm=1.0`) is applied to prevent the ascent step from causing divergence.
+
+**Why it is more targeted:** Unlike fine-tuning, which passively forgets, NegGrad actively pushes the model away from airplane predictions. This often results in lower Acc_Df and lower MIA.
+
+**The tradeoff:** Too high an α can cause the retain accuracy to drop as well (collateral damage), because shared features between airplanes and other classes may be disrupted.
+
+**Implementation:** Original model weights, SGD at LR 0.01, 10 epochs, cycling through D_f in sync with D_r batches.
+
+---
 
 ### Evaluation Metrics
 
-| Metric | What it measures | Target |
-|--------|-----------------|--------|
-| **Acc_Dr** | Accuracy on retain set — did the model keep its knowledge of the 9 retain classes? | High ↑ |
-| **Acc_Df** | Accuracy on forget set — can the model still classify airplanes correctly? | Low ↓ (near 0%) |
-| **Acc_val** | Overall test set accuracy | High ↑ |
-| **MIA** | Membership Inference Attack — can an attacker detect that airplane images were ever in training? | Low ↓ (near 50% = random) |
+| Metric | What it measures | Target | Why it matters |
+|--------|-----------------|--------|----------------|
+| **Acc_Dr** | Accuracy on retain set | High ↑ | Model must not forget the 9 classes it should keep |
+| **Acc_Df** | Accuracy on forget set | Low ↓ (~0%) | Direct measure of whether forgetting worked |
+| **Acc_val** | Overall test accuracy | High ↑ | Ensures the model is still useful generally |
+| **MIA** | Membership Inference Attack accuracy | Low ↓ (~50%) | Privacy metric — can an attacker prove airplane data was used? |
+| **Avg.Gap** | Mean absolute gap from Retrain across all 4 metrics | Low ↓ | Summary score — how close are we to perfect unlearning? |
+
+### Membership Inference Attack — Explained
+An MIA tries to answer: *"Was this sample in the training data?"*
+
+The loss-based approach used here:
+1. Compute per-sample cross-entropy loss on D_f (these were in training)
+2. Compute per-sample cross-entropy loss on test set (these were not in training)
+3. If the model was trained on D_f → its loss on D_f will be very low (it memorised them)
+4. Train a logistic regression classifier: can it separate D_f from test samples using loss alone?
+5. Report accuracy of this classifier
+
+**Interpretation:**
+- MIA = 100% → model perfectly remembers all forget samples (unlearning completely failed)
+- MIA = 50% → model treats forget samples identically to unseen test data (perfect unlearning)
+- MIA for Retrain → should be near 50% since D_f was never used in training
+
+### Results (To be filled after running experiments)
+
+| Method | Acc_Dr (↑) | Acc_Df (↓) | Acc_val (↑) | MIA (↓) | Avg. Gap |
+|--------|-----------|-----------|------------|--------|---------|
+| Original | — | — | — | — | — |
+| Retrain | — | — | — | — | 0.00 |
+| Fine-tune | — | — | — | — | — |
+| NegGrad | — | — | — | — | — |
 
 ---
 
 ## Project Structure
 
+Each week is a self-contained folder. Shared environment (`pyproject.toml`, `.venv`) lives at the `experiments/` root.
+
 ```
 experiments/
-├── config.py            # All hyperparameters and device detection
-├── data_utils.py        # CIFAR-10 loading, forget/retain split
-├── train_original.py    # ResNet-18 training script
-├── checkpoints/         # Saved model weights (not tracked in git)
-│   └── original_model.pth
-├── data/                # CIFAR-10 dataset (not tracked in git)
-├── results/             # Evaluation outputs (not tracked in git)
-└── pyproject.toml       # uv dependency management
+├── week1_baseline/
+│   ├── config.py            # Hyperparameters and device detection
+│   ├── data_utils.py        # CIFAR-10 loading, forget/retain split
+│   ├── train_original.py    # ResNet-18 training script (--resume supported)
+│   ├── checkpoints/         # Saved weights — not tracked in git
+│   │   └── original_model.pth
+│   └── data/                # CIFAR-10 dataset — not tracked in git
+│
+├── week2_unlearning/
+│   ├── config.py            # Inherits Week 1 settings, points to Week 1 data/model
+│   ├── data_utils.py        # Same loader, download=False (reuses Week 1 data)
+│   ├── unlearn.py           # Retrain, Fine-tune, NegGrad implementations
+│   ├── evaluate.py          # Acc_Dr, Acc_Df, Acc_val, MIA metrics
+│   ├── run_experiments.py   # Main runner — produces results table
+│   ├── checkpoints/         # Unlearned model weights — not tracked in git
+│   └── results/             # JSON results output — not tracked in git
+│
+├── README.md                # This research log
+├── pyproject.toml           # Shared uv dependencies
+└── uv.lock
 ```
 
 ---
@@ -199,15 +269,19 @@ experiments/
 ## How to Run
 
 ```bash
-# Clone the repository
+# Clone and set up
 git clone https://github.com/Sidharth2ko2/machine-unlearning-dissertation.git
 cd machine-unlearning-dissertation/experiments
-
-# Set up environment with uv
 uv venv && uv sync
 
-# Train baseline model (clean 100 epoch run)
+# Week 1 — Train baseline model
+cd week1_baseline
 uv run python train_original.py --epochs 100
+
+# Week 2 — Run unlearning experiments (requires Week 1 checkpoint)
+cd ../week2_unlearning
+uv run python run_experiments.py
+uv run python run_experiments.py --skip-retrain   # skip the 37-min retrain if already done
 ```
 
 ### Dependencies
