@@ -47,11 +47,19 @@ def split_forget_retain(train_ds):
 
 
 def get_all_loaders(batch_size=BATCH_SIZE):
-    train_ds, test_ds   = get_datasets()
+    train_ds, test_ds    = get_datasets()
     forget_ds, retain_ds = split_forget_retain(train_ds)
+
+    # Forget-class test images — used for class-balanced MIA evaluation.
+    # These are airplane TEST images (never in training), same class as D_f.
+    # Comparing D_f loss vs these isolates membership signal from class signal.
+    test_targets = np.array(test_ds.targets)
+    forget_class_test_ds = Subset(test_ds, np.where(test_targets == FORGET_CLASS)[0])
+
     return {
-        'train':  DataLoader(train_ds,  batch_size=batch_size, shuffle=True,  num_workers=2),
-        'test':   DataLoader(test_ds,   batch_size=batch_size, shuffle=False, num_workers=2),
-        'forget': DataLoader(forget_ds, batch_size=batch_size, shuffle=True,  num_workers=2),
-        'retain': DataLoader(retain_ds, batch_size=batch_size, shuffle=True,  num_workers=2),
+        'train':             DataLoader(train_ds,           batch_size=batch_size, shuffle=True,  num_workers=2),
+        'test':              DataLoader(test_ds,            batch_size=batch_size, shuffle=False, num_workers=2),
+        'forget':            DataLoader(forget_ds,          batch_size=batch_size, shuffle=True,  num_workers=2),
+        'retain':            DataLoader(retain_ds,          batch_size=batch_size, shuffle=True,  num_workers=2),
+        'forget_class_test': DataLoader(forget_class_test_ds, batch_size=batch_size, shuffle=False, num_workers=2),
     }

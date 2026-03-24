@@ -29,10 +29,15 @@ MOMENTUM        = 0.9
 WEIGHT_DECAY    = 5e-4
 
 # ── Unlearning-specific hyperparameters ────────────────────────────────────────
-LR_UNLEARN          = 0.01    # lower LR for fine-tuning on retain set
+LR_FINETUNE         = 0.01    # LR for fine-tuning on retain set
+LR_NEGGRAD          = 0.0001  # LR for NegGrad — must be much smaller than finetune
+                              # Gradient ascent is unstable at high LR:
+                              # with 45k retain samples × 10 epochs = ~3500 steps,
+                              # even small alpha causes collapse at LR=0.01.
+                              # LR=0.0001 gives effective ascent step of 0.00005/step.
 EPOCHS_UNLEARN      = 10      # epochs for Fine-tune and NegGrad
 EPOCHS_RETRAIN      = 100     # epochs for Retrain from scratch (gold standard)
-NEGGRAD_ALPHA       = 0.5     # weight balancing forget-ascent vs retain-descent
+NEGGRAD_ALPHA       = 0.5     # balance between forget-ascent and retain-descent
 
 
 def get_device():

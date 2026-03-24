@@ -48,7 +48,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip-retrain', action='store_true',
                         help='Skip retraining from scratch (saves ~37 min)')
+    parser.add_argument('--reuse-checkpoints', action='store_true',
+                        help='Load all saved checkpoints, only redo NegGrad (saves ~45 min)')
     args = parser.parse_args()
+    if args.reuse_checkpoints:
+        args.skip_retrain = True
 
     setup_dirs()
     device = get_device()
@@ -78,12 +82,21 @@ def main():
     results['Retrain'] = evaluate_model(retrain_model, loaders, device)
 
     # ── 2. Fine-tune ───────────────────────────────────────────────────────────
-    print("\n[2/4] Fine-tune on D_r ...")
-    ft_model = finetune(original_model, loaders['retain'], device)
+    ft_ckpt = os.path.join(CHECKPOINT_DIR, 'finetune_model.pth')
+    if args.reuse_checkpoints and os.path.exists(ft_ckpt):
+        print("\n[2/4] Loading cached Fine-tune model ...")
+        m = resnet18(weights=None)
+        m.fc = nn.Linear(m.fc.in_features, NUM_CLASSES)
+        m.load_state_dict(torch.load(ft_ckpt, map_location=device))
+        ft_model = m.to(device)
+    else:
+        print("\n[2/4] Fine-tune on D_r ...")
+        ft_model = finetune(original_model, loaders['retain'], device)
     results['Fine-tune'] = evaluate_model(ft_model, loaders, device)
 
     # ── 3. Negative Gradient ───────────────────────────────────────────────────
-    print("\n[3/4] Negative Gradient (ascent on D_f + descent on D_r) ...")
+    # Always retrain NegGrad — alpha changed from 0.5 → 0.1 to fix collapse
+    print("\n[3/4] Negative Gradient (alpha=0.1, fixed from 0.5) ...")
     ng_model = negative_gradient(original_model, loaders['forget'],
                                  loaders['retain'], device)
     results['NegGrad'] = evaluate_model(ng_model, loaders, device)

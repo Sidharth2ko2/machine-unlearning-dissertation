@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from config import (
     CHECKPOINT_DIR, EPOCHS_RETRAIN, EPOCHS_UNLEARN,
-    LR_ORIGINAL, LR_UNLEARN, MOMENTUM, NEGGRAD_ALPHA,
+    LR_ORIGINAL, LR_FINETUNE, LR_NEGGRAD, MOMENTUM, NEGGRAD_ALPHA,
     NUM_CLASSES, WEIGHT_DECAY,
 )
 
@@ -76,7 +76,7 @@ def finetune(original_model, retain_loader, device, epochs=EPOCHS_UNLEARN):
     print(f"\n[Fine-tune] Fine-tuning on D_r only ({epochs} epochs) ...")
     model     = copy.deepcopy(original_model)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=LR_UNLEARN,
+    optimizer = optim.SGD(model.parameters(), lr=LR_FINETUNE,
                           momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     for epoch in tqdm(range(1, epochs + 1), desc='Fine-tune', unit='epoch'):
@@ -109,10 +109,12 @@ def negative_gradient(original_model, forget_loader, retain_loader,
     destabilizing the model weights.
     """
     print(f"\n[NegGrad] Gradient ascent on D_f + descent on D_r "
-          f"({epochs} epochs, alpha={alpha}) ...")
+          f"({epochs} epochs, alpha={alpha}, lr={LR_NEGGRAD}) ...")
     model     = copy.deepcopy(original_model)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=LR_UNLEARN,
+    # Use a much smaller LR than fine-tune — gradient ascent is inherently
+    # unstable and a high LR destroys shared retain/forget features.
+    optimizer = optim.SGD(model.parameters(), lr=LR_NEGGRAD,
                           momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     forget_cycle = _cycle(forget_loader)

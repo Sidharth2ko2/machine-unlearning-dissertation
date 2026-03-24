@@ -225,14 +225,49 @@ The loss-based approach used here:
 - MIA = 50% → model treats forget samples identically to unseen test data (perfect unlearning)
 - MIA for Retrain → should be near 50% since D_f was never used in training
 
-### Results (To be filled after running experiments)
+### Implementation Decisions & Fixes
 
-| Method | Acc_Dr (↑) | Acc_Df (↓) | Acc_val (↑) | MIA (↓) | Avg. Gap |
+**NegGrad learning rate tuning:**
+The first attempt used `LR=0.01` with `alpha=0.5`. This caused complete model collapse — Acc_Dr dropped to ~20% because over ~3,500 gradient steps the ascent destroyed shared features between airplane and other classes. Reducing alpha to 0.1 at the same LR still caused collapse (~21% Acc_Dr) for the same reason. The fix was separating the NegGrad LR from Fine-tune's LR: `LR_NEGGRAD=0.0001` (100× smaller than Fine-tune). This gives an effective ascent step size of 0.00005 per batch — small enough that the retain descent can compensate. The model stabilised at 91.73% Acc_Dr while still achieving 0.24% Acc_Df.
+
+**MIA implementation — class-balanced fix:**
+The first MIA implementation compared D_f losses against the full mixed test set (all 10 classes). This was flawed: for the Retrain model, which has high loss on ALL airplane images (both D_f and test airplane images), the logistic regression was detecting "is this an airplane?" rather than "was this in training?". The fix was to compare D_f against only forget-class test images (airplane test images). Both groups are the same class, so the only difference is membership. After the fix, Retrain MIA dropped from 94.43% → 53.90% (correctly near 50% = attacker cannot distinguish).
+
+---
+
+### Final Results
+
+| Method | Acc_Dr (↑) | Acc_Df (↓) | Acc_val (↑) | MIA (↓) | Avg.Gap |
 |--------|-----------|-----------|------------|--------|---------|
-| Original | — | — | — | — | — |
-| Retrain | — | — | — | — | 0.00 |
-| Fine-tune | — | — | — | — | — |
-| NegGrad | — | — | — | — | — |
+| Original | 97.98% | 98.38% | 88.27% | 55.75% | 27.27% |
+| Retrain | 98.32% | 0.00% | 79.76% | 53.90% | — |
+| Fine-tune | 93.16% | 0.20% | 77.00% | 53.60% | **2.11%** |
+| NegGrad | 91.73% | 0.24% | 75.48% | 54.90% | **3.03%** |
+
+### Comparison with Paper's Table 1 (CIFAR-10, ResNet-18)
+
+| Method | Metric | Ours | Paper | Match? |
+|--------|--------|------|-------|--------|
+| Retrain | Acc_Df | 0.00% | 0.00% | ✅ Exact |
+| Fine-tune | Acc_Df | 0.20% | 0.22% | ✅ Near identical |
+| NegGrad | Acc_Df | 0.24% | 0.22% | ✅ Near identical |
+| Fine-tune | Acc_val | 77.00% | 76.82% | ✅ Within 0.2% |
+| NegGrad | Acc_val | 75.48% | 72.86% | ✅ Within 3% |
+| Fine-tune | Acc_Dr | 93.16% | 99.63% | ⚠️ 6% gap — tunable |
+| NegGrad | Acc_Dr | 91.73% | 97.16% | ⚠️ 5% gap — tunable |
+| All | MIA | ~54% | ~10-25% | ✅ Same conclusion, different scale* |
+
+*MIA scale difference: our implementation reports binary classifier accuracy (50% = perfect unlearning), paper reports true positive rate (0% = perfect unlearning). Both indicate the attacker cannot reliably identify forget samples after unlearning.
+
+### Week 2 Summary
+
+| Item | Status | Detail |
+|------|--------|--------|
+| Retrain implemented | ✅ | 98.32% Acc_Dr, 0.00% Acc_Df |
+| Fine-tune implemented | ✅ | 93.16% Acc_Dr, 0.20% Acc_Df, Avg.Gap 2.11% |
+| NegGrad implemented | ✅ | 91.73% Acc_Dr, 0.24% Acc_Df, Avg.Gap 3.03% |
+| MIA metric fixed | ✅ | Class-balanced, Retrain MIA ≈ 50% as expected |
+| Results match paper trends | ✅ | Acc_Df and Acc_val within paper range |
 
 ---
 

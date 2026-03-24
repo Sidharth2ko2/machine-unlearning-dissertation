@@ -49,35 +49,37 @@ def per_sample_loss(model, loader, device):
 
 # ── Membership Inference Attack ─────────────────────────────────────────────────
 
-def membership_inference_attack(model, forget_loader, test_loader, device):
+def membership_inference_attack(model, forget_loader, forget_class_test_loader, device):
     """
-    Loss-based Membership Inference Attack (MIA).
+    Loss-based Membership Inference Attack (MIA) — class-balanced version.
 
-    Idea:
-      - Forget set samples (D_f) were in training → model has low loss on them
-      - Test set samples were NOT in training    → model has higher loss on them
-      - An attacker trains a binary classifier on loss values to distinguish them
+    Compares D_f (forget-class training images) against forget-class TEST images.
+    Both groups are the same class (airplane), so the only difference is
+    whether the model was trained on them or not.
 
     If unlearning worked:
-      - Loss on D_f should look like loss on test set (model forgot D_f)
-      - Attacker can't distinguish → MIA accuracy ≈ 50% (random guess) → GOOD
+      - D_f loss ≈ forget-class test loss (model treats both as unseen)
+      - Attacker can't distinguish → MIA accuracy ≈ 50% → GOOD
 
     If unlearning failed:
-      - Loss on D_f is still very low (model still remembers D_f)
-      - Attacker easily identifies D_f as training members → MIA accuracy HIGH → BAD
+      - D_f loss still very low (memorised), test loss higher
+      - Attacker easily separates them → MIA accuracy HIGH → BAD
 
-    Returns MIA accuracy (%) — lower is better for unlearning.
+    Using full mixed test set (old approach) was wrong for Retrain/NegGrad because
+    the model has high loss on ALL airplane images — confounding membership with class.
+    Class-balanced MIA isolates the true privacy signal.
+
+    Returns MIA accuracy (%) — lower is better, 50% = perfect unlearning.
     """
-    forget_losses = per_sample_loss(model, forget_loader, device)
-    test_losses   = per_sample_loss(model, test_loader,   device)
+    forget_losses = per_sample_loss(model, forget_loader,            device)
+    test_losses   = per_sample_loss(model, forget_class_test_loader, device)
 
-    # Balance the two groups
     n = min(len(forget_losses), len(test_losses))
     forget_losses = forget_losses[:n]
     test_losses   = test_losses[:n]
 
     X = np.concatenate([forget_losses, test_losses]).reshape(-1, 1)
-    y = np.concatenate([np.ones(n), np.zeros(n)])   # 1=member, 0=non-member
+    y = np.concatenate([np.ones(n), np.zeros(n)])   # 1=member (D_f), 0=non-member (test)
 
     clf = LogisticRegression()
     clf.fit(X, y)
@@ -90,13 +92,13 @@ def membership_inference_attack(model, forget_loader, test_loader, device):
 def evaluate_model(model, loaders, device):
     """
     Run all four metrics on a model and return as a dict.
-    loaders must have keys: 'retain', 'forget', 'test'
+    loaders must have keys: 'retain', 'forget', 'test', 'forget_class_test'
     """
-    acc_dr  = accuracy(model, loaders['retain'], device)
-    acc_df  = accuracy(model, loaders['forget'], device)
-    acc_val = accuracy(model, loaders['test'],   device)
+    acc_dr  = accuracy(model, loaders['retain'],           device)
+    acc_df  = accuracy(model, loaders['forget'],           device)
+    acc_val = accuracy(model, loaders['test'],             device)
     mia     = membership_inference_attack(model, loaders['forget'],
-                                          loaders['test'], device)
+                                          loaders['forget_class_test'], device)
     return {'Acc_Dr': acc_dr, 'Acc_Df': acc_df, 'Acc_val': acc_val, 'MIA': mia}
 
 
