@@ -15,8 +15,9 @@ the student model (unlearned ResNet-18) is trained with three losses:
      the student to classify airplanes as retain-like → forgetting.
 
 3. Contrastive loss L_c (Equation 12):
-   → Pull: student embedding of X_c ↔ student embedding of X_r (same side)
-   → Push: student embedding of X_c ↔ student embedding of X_f (opposite sides)
+   → anchor=X_f, positive=X_c (counterfactual), negative=X_r (retain)
+   → Pull: student embedding of X_f toward X_c (counterfactual near retain side)
+   → Push: student embedding of X_f away from X_r (retain samples)
    → This rigidifies the decision boundary between forget and retain classes.
 
 Total loss = L_retain + L_f + λ_c × L_c
@@ -65,13 +66,13 @@ def contrastive_loss(z_anchor, z_pos, z_neg, temperature=TEMPERATURE):
     """
     InfoNCE loss for boundary rigidification.
 
-    z_anchor : embeddings of counterfactual X_c   [B, 512]
-    z_pos    : embeddings of retain samples X_r   [B, 512]
-    z_neg    : embeddings of forget samples X_f   [B, 512]
+    z_anchor : embeddings of forget samples X_f      [B, 512]
+    z_pos    : embeddings of counterfactual X_c      [B, 512]
+    z_neg    : embeddings of retain samples X_r      [B, 512]
 
-    Goal: pull (anchor, positive) close, push (anchor, negative) apart.
-    This makes the model's representation space clearly separate
-    forget class from retain classes.
+    Paper Eq. 12: anchor=xf, positive=xc (counterfactual), negative=xr (retain).
+    Pull forget embeddings toward counterfactuals; push away from retain samples.
+    This rigidifies the decision boundary.
     """
     z_anchor = F.normalize(z_anchor, dim=1)
     z_pos    = F.normalize(z_pos,    dim=1)
@@ -139,23 +140,32 @@ def train_dkf(original_model, forget_loader, retain_loader, device,
     # ═══════════════════════════════════════════════════════════════════════════
     # PHASE 1 — Pre-train β-VAE so counterfactuals are stable
     # ═══════════════════════════════════════════════════════════════════════════
-    print(f"\n[DKF Phase 1] Pre-training β-VAE for {vae_pretrain_epochs} epochs ...")
-    vae_opt      = optim.Adam(vae.parameters(), lr=lr)
-    forget_cycle = _cycle(forget_loader)
+    vae_ckpt_path = os.path.join(CHECKPOINT_DIR, f'vae_pretrained_e{vae_pretrain_epochs}_b{int(BETA)}.pth')
 
-    for epoch in tqdm(range(1, vae_pretrain_epochs + 1), desc='VAE pretrain', unit='epoch'):
-        vae.train()
-        for x_r, y_r in retain_loader:
-            x_f, y_f = next(forget_cycle)
-            x_r, y_r = x_r.to(device), y_r.to(device)
-            x_f, y_f = x_f.to(device), y_f.to(device)
-            b = min(x_r.size(0), x_f.size(0))
-            x_r, y_r, x_f, y_f = x_r[:b], y_r[:b], x_f[:b], y_f[:b]
+    if os.path.exists(vae_ckpt_path):
+        print(f"\n[DKF Phase 1] Loading cached β-VAE ({vae_pretrain_epochs} epochs, beta={BETA}) ...")
+        vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
+    else:
+        print(f"\n[DKF Phase 1] Pre-training β-VAE for {vae_pretrain_epochs} epochs ...")
+        vae_opt      = optim.Adam(vae.parameters(), lr=lr)
+        forget_cycle = _cycle(forget_loader)
 
-            vae_opt.zero_grad()
-            loss, _ = vae.compute_loss(x_f, x_r, y_r, y_f)
-            loss.backward()
-            vae_opt.step()
+        for epoch in tqdm(range(1, vae_pretrain_epochs + 1), desc='VAE pretrain', unit='epoch'):
+            vae.train()
+            for x_r, y_r in retain_loader:
+                x_f, y_f = next(forget_cycle)
+                x_r, y_r = x_r.to(device), y_r.to(device)
+                x_f, y_f = x_f.to(device), y_f.to(device)
+                b = min(x_r.size(0), x_f.size(0))
+                x_r, y_r, x_f, y_f = x_r[:b], y_r[:b], x_f[:b], y_f[:b]
+
+                vae_opt.zero_grad()
+                loss, _ = vae.compute_loss(x_f, x_r, y_r, y_f)
+                loss.backward()
+                vae_opt.step()
+
+        torch.save(vae.state_dict(), vae_ckpt_path)
+        print(f"[DKF Phase 1] VAE saved -> {vae_ckpt_path}")
 
     # Freeze VAE — counterfactuals are now fixed inputs for the student
     vae.eval()
@@ -164,26 +174,15 @@ def train_dkf(original_model, forget_loader, retain_loader, device,
     print("[DKF Phase 1] β-VAE pre-training complete. VAE frozen.")
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # PHASE 2 — Train student model with frozen VAE
+    # PHASE 2 — Single-stage training with retain CE + Lf + Lc
     #
-    # Paper's actual loss (Section 4.3, end): L = L_f + λ * L_c
-    # There is NO explicit retain CE loss. Retain accuracy is preserved by
-    # inertia — student starts from original model, only forget-class gradients
-    # update it. Our previous retain CE was not in the paper and was the root
-    # cause of Acc_Dr collapse (large λ_retain gradients corrupted backbone).
-    #
-    # Contrastive direction (paper Eq. 12):
-    #   anchor = x_f  (forget sample)
-    #   positive = x_c (counterfactual, same class as x_f)
-    #   negative = x_r (retain samples, different class)
-    # Previous code had this flipped (anchor=x_cf, pos=x_r, neg=x_f).
-    #
-    # Loop iterates over forget_loader (D_f, ~39 batches), cycling retain
-    # samples as negatives — matching paper's "sum over x_f ∈ D_f" in Eq. 12.
+    # z_r is DETACHED so contrastive gradients don't flow through retain
+    # samples — retain topology preserved naturally. The contrastive loss
+    # still pushes z_f (forget) toward z_cf and away from z_r via the
+    # anchor path, creating embedding-space confusion for the forget class.
     # ═══════════════════════════════════════════════════════════════════════════
     print(f"\n[DKF Phase 2] Training student for {student_epochs} epochs  "
-          f"(λ_retain={lambda_retain}, λ_forget={lambda_forget}, "
-          f"λ_c={lambda_c}, lr={lr}) ...")
+          f"(λ_retain={lambda_retain}, λ_forget={lambda_forget}, λ_c={lambda_c}, lr={lr}) ...")
 
     student      = copy.deepcopy(original_model).to(device)
     student_opt  = optim.Adam(student.parameters(), lr=lr)
@@ -191,38 +190,32 @@ def train_dkf(original_model, forget_loader, retain_loader, device,
 
     for epoch in tqdm(range(1, student_epochs + 1), desc='DKF student', unit='epoch'):
         student.train()
-
-        for x_r, y_r in retain_loader:         # iterate over retain (strongest anchor)
+        for x_r, y_r in retain_loader:
             x_f, y_f = next(forget_cycle)
             x_r, y_r = x_r.to(device), y_r.to(device)
             x_f, y_f = x_f.to(device), y_f.to(device)
             b = min(x_r.size(0), x_f.size(0))
             x_r, y_r, x_f, y_f = x_r[:b], y_r[:b], x_f[:b], y_f[:b]
 
-            # Generate counterfactual with frozen VAE
             with torch.no_grad():
                 _, x_cf, _, _, _, _, _, _ = vae(x_f, x_r)
+                teacher_cf = F.softmax(teacher(x_cf), dim=1)
 
             student_opt.zero_grad()
 
-            # Loss 1: Retain CE — strongly anchor the 9 retain classes
+            # Retain CE — backbone stabiliser
             loss_retain = lambda_retain * criterion(student(x_r), y_r)
 
-            # Loss 2: Forgetting via counterfactual distillation (L_f, Eq. 10)
-            with torch.no_grad():
-                teacher_cf = F.softmax(teacher(x_cf), dim=1)
+            # Lf — counterfactual distillation (Eq. 10)
             loss_forget = lambda_forget * F.kl_div(
                 F.log_softmax(student(x_f), dim=1),
                 teacher_cf, reduction='batchmean'
             )
 
-            # Loss 3: Contrastive (L_c, Eq. 12) — paper's exact direction:
-            #   anchor=x_f, positive=x_cf, negative=x_r
-            # z_r is detached so gradient only flows through x_f and x_cf,
-            # preventing contrastive from reshaping retain representations.
+            # Lc — contrastive boundary rigidification (Eq. 12)
             z_f  = get_features(student, x_f)
             z_cf = get_features(student, x_cf)
-            z_r  = get_features(student, x_r).detach()
+            z_r  = get_features(student, x_r)
             loss_contrast = lambda_c * contrastive_loss(z_f, z_cf, z_r)
 
             loss = loss_retain + loss_forget + loss_contrast

@@ -26,19 +26,15 @@ WEIGHT_DECAY    = 5e-4
 
 # ── β-VAE hyperparameters ──────────────────────────────────────────────────────
 LATENT_DIM      = 64    # dimensionality of both S (shared) and U (unique) latent spaces
-BETA            = 4.0   # β=4 gives sharper counterfactuals than β=6 at short VAE
-                        # pretrain (5 epochs). β=6 needs much longer training to
-                        # produce clean x_cf — at 5 epochs, β=6 counterfactuals
-                        # are blurry → teacher(x_cf) ≈ uniform → destructive L_f.
+BETA            = 4.0   # testing β=4: Mac used this, may produce better counterfactuals
 
 # ── DKF training hyperparameters ───────────────────────────────────────────────
-VAE_PRETRAIN_EPOCHS = 5     # Phase 1: pre-train VAE alone so counterfactuals
-                            # are stable before student training begins.
-DKF_EPOCHS          = 10   # Phase 2: student training epochs (VAE frozen)
+VAE_PRETRAIN_EPOCHS = 5     # use existing vae_pretrained_e5_b4.pth checkpoint
+DKF_EPOCHS          = 5    # retain-outer loop: 360 batches/ep → 5ep = 1800 steps total
 DKF_LR              = 5e-5 # small LR — prevents forget gradient from corrupting backbone
-LAMBDA_RETAIN       = 10.0 # strong retain CE anchor (best found across all attempts)
-LAMBDA_FORGET       = 0.1  # gentle forgetting signal
-LAMBDA_C            = 0.05 # small contrastive with correct direction and detached negatives
+LAMBDA_RETAIN       = 10.0 # strong backbone anchor
+LAMBDA_FORGET       = 0.06 # slightly less pressure: target Acc_val recovery + lower MIA
+LAMBDA_C            = 0.01 # gentle contrastive
 TEMPERATURE         = 0.07 # paper's τ
 
 
