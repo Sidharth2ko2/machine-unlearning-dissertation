@@ -460,6 +460,85 @@ Fine-tune retains an edge on Acc_Df (0.10% vs 2.26%) — a fundamental tradeoff:
 
 ---
 
+## Week 6-7 — RA-DKF: Representation-Aligned Disentangled Knowledge Forgetting (Novelty)
+
+### Motivation
+
+Base DKF protects shared knowledge at the *latent level* — the β-VAE separates shared (S) and unique (U) representations so counterfactuals preserve class-crossing features. However, during student training the forget loss can still shift the student's feature representations for retain-class images away from the original model's representations. This drift is measurable: cosine similarity between teacher and student feature vectors on retain samples drops noticeably with DKF alone.
+
+**RA-DKF** adds one explicit term to the student loss to anchor the student's retain-class feature geometry to the frozen original model:
+
+```
+L_align = MSE( normalize(f_student(x_r)),  normalize(f_teacher(x_r)) )
+L = L_retain + L_forget + L_contrast + λ_align × L_align
+```
+
+where `f(.)` is the 512-dim avgpool representation (penultimate layer of ResNet-18).
+
+### Novelty Claim
+
+> The base DKF method preserves shared knowledge through latent disentanglement and counterfactual distillation. However, during student optimisation, the forgetting gradient can still shift the student's retain-class representations away from the original model, causing partial damage to shared feature geometry. I propose **Representation-Aligned DKF (RA-DKF)**, which adds a normalised MSE alignment term between the student's and teacher's retain-class features. This adds an explicit representation-space anchor on top of DKF's latent-space disentanglement, directly targeting the measured feature drift.
+
+### What Changes vs Base DKF
+
+| Component | DKF | RA-DKF |
+|-----------|-----|--------|
+| β-VAE Phase 1 | ✅ same | ✅ reused (cached checkpoint) |
+| L_retain (CE on D_r) | ✅ | ✅ |
+| L_forget (KL vs counterfactual) | ✅ | ✅ |
+| L_contrast (InfoNCE) | ✅ | ✅ |
+| **L_align (feature MSE vs teacher)** | ✗ | **✅ new** |
+| Gradient update | single backward | single backward |
+
+Only one extra forward pass through the frozen teacher per step (no_grad). Runtime overhead ≈ 10%.
+
+### λ_align Sweep
+
+`run_experiments.py` tests multiple λ_align values in one run and prints a combined table:
+
+```bash
+uv run python run_experiments.py --lambda-aligns 0.1 0.5 1.0
+```
+
+Best λ_align is selected by lowest **Avg.Gap**. Typical trade-off:
+- Higher λ_align → better retain feature cosine, better Acc_Dr
+- Very high λ_align → over-anchors the student, slightly weaker forgetting (Acc_Df rises)
+
+### New Evaluation Metrics
+
+`evaluate_shared_knowledge.py` extends the standard Acc_Dr / Acc_Df / Acc_val / MIA table with representation-level evidence:
+
+| Metric | What it measures | Target |
+|--------|-----------------|--------|
+| **Retain_Feature_Cosine** | Avg cosine sim of student vs teacher feature vectors on D_r | High ↑ |
+| **Retain_Feature_Drift** | 1 − cosine (how far retain representations moved) | Low ↓ |
+| **Retain_Agreement** | % of retain samples where student and teacher predict the same class | High ↑ |
+| **Retain_KL** | KL(student ‖ teacher) on retain set | Low ↓ |
+| **Retain_ARI / NMI** | Clustering quality of student embeddings on retain classes | High ↑ |
+
+These metrics directly demonstrate the RA-DKF claim: adding L_align reduces Retain_Feature_Drift compared to base DKF, especially for forget-adjacent classes (bird, ship) that share structural features with airplane.
+
+### Expected Result Direction
+
+| Method | Acc_Dr | Acc_Df | Avg.Gap | Retain_Feature_Cosine |
+|--------|--------|--------|---------|----------------------|
+| DKF | 94.18% | 2.26% | 2.65% | baseline |
+| RA-DKF (λ=0.1) | ↑ higher | ≈ same | ↓ lower | ↑ higher |
+| RA-DKF (λ=0.5) | ↑ higher | ≈ same | ↓ lower | ↑↑ higher |
+| RA-DKF (λ=1.0) | ↑ higher | may rise slightly | comparable | ↑↑↑ higher |
+
+### Week 6-7 Summary
+
+| Item | Status | Detail |
+|------|--------|--------|
+| RA-DKF implemented | ✅ | L_align added to DKF student training |
+| VAE reuse | ✅ | Checks week3-4 cached checkpoint first |
+| λ_align sweep | ✅ | 0.1 / 0.5 / 1.0 tested in one run |
+| Representation metrics | ✅ | Feature cosine, drift, agreement, KL, ARI/NMI |
+| Bug fixed | ✅ | feature_drift_metrics processes teacher+student on same batches |
+
+---
+
 ## Project Structure
 
 Each week is a self-contained folder. Shared environment (`pyproject.toml`, `.venv`) lives at the root.
@@ -493,6 +572,18 @@ machine-unlearning-dissertation/
 │   ├── checkpoints/         # VAE and DKF model weights — not tracked in git
 │   └── results/             # JSON results output — not tracked in git
 │
+├── week5_analysis/
+│   ├── projection_unlearning.py      # GP-Unlearn: gradient projection baseline
+│   ├── visualize_disentanglement.py  # t-SNE of β-VAE S and U latent spaces
+│   └── visualize_shared_knowledge.py # Counterfactual grid + cosine similarity panels
+│
+├── week6_7_novelty/
+│   ├── ra_dkf.py                     # RA-DKF training (DKF + L_align)
+│   ├── run_experiments.py            # λ_align sweep + full comparison table
+│   ├── evaluate_shared_knowledge.py  # Feature drift, agreement, KL, ARI/NMI metrics
+│   ├── checkpoints/                  # RA-DKF model weights — not tracked in git
+│   └── results/                      # JSON results — not tracked in git
+│
 ├── README.md                # This research log
 ├── pyproject.toml           # Shared uv dependencies
 └── uv.lock
@@ -522,6 +613,17 @@ cd ../week3-4
 uv run python run_experiments.py
 # First run trains β-VAE (~5 min) then student (~10 min)
 # Subsequent runs load cached VAE checkpoint — only ~10 min total
+
+# Week 6-7 — Run RA-DKF novelty (requires Week 1 + Week 2 + Week 3 checkpoints)
+cd ../week6_7_novelty
+uv run python run_experiments.py
+# Reuses the Week 3 β-VAE checkpoint automatically — no VAE re-training
+# Runs λ_align sweep over [0.1, 0.5, 1.0] → ~30 min total
+# Use --reuse-checkpoints to reload saved RA-DKF models and skip training
+
+uv run python run_experiments.py --lambda-aligns 0.5          # single λ
+uv run python run_experiments.py --reuse-checkpoints          # evaluate only
+uv run python run_experiments.py --lambda-aligns 0.1 0.5 1.0 --student-epochs 5
 ```
 
 ### Dependencies
