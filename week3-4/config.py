@@ -29,7 +29,7 @@ LATENT_DIM      = 64    # dimensionality of both S (shared) and U (unique) laten
 BETA            = 4.0   # testing β=4: Mac used this, may produce better counterfactuals
 
 # ── DKF training hyperparameters ───────────────────────────────────────────────
-VAE_PRETRAIN_EPOCHS = 5     # use existing vae_pretrained_e5_b4.pth checkpoint
+VAE_PRETRAIN_EPOCHS = 15    # use existing vae_pretrained_e15_b4.pth checkpoint
 DKF_EPOCHS          = 5    # retain-outer loop: 360 batches/ep → 5ep = 1800 steps total
 DKF_LR              = 5e-5 # small LR — prevents forget gradient from corrupting backbone
 LAMBDA_RETAIN       = 10.0 # strong backbone anchor

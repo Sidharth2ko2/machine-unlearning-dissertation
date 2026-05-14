@@ -258,22 +258,33 @@ def main():
     from torchvision.models import resnet18
     original = resnet18(weights=None)
     original.fc = nn.Linear(512, NUM_CLASSES)
-    original.load_state_dict(torch.load(ORIGINAL_MODEL_PATH, map_location=device))
+    ckpt = torch.load(ORIGINAL_MODEL_PATH, map_location=device)
+    original.load_state_dict(ckpt['model_state_dict'] if 'model_state_dict' in ckpt else ckpt)
     original = original.to(device)
     original.eval()
 
     loaders = get_all_loaders()
 
-    # ── Train GP-Unlearn ───────────────────────────────────────────────────────
-    gp_model = train_gp_unlearn(
-        original,
-        forget_loader = loaders['forget'],
-        retain_loader = loaders['retain'],
-        device        = device,
-        epochs        = 10,
-        lr            = 5e-4,
-        alpha         = 0.5,
-    )
+    # ── Train GP-Unlearn (or load existing checkpoint) ────────────────────────
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    ckpt_path = os.path.join(CHECKPOINT_DIR, 'gp_unlearn_model.pth')
+    if os.path.exists(ckpt_path):
+        print(f"\n[GP-Unlearn] Loading existing checkpoint <- {ckpt_path}")
+        from torchvision.models import resnet18
+        gp_model = resnet18(weights=None)
+        gp_model.fc = nn.Linear(512, NUM_CLASSES)
+        gp_model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        gp_model = gp_model.to(device)
+    else:
+        gp_model = train_gp_unlearn(
+            original,
+            forget_loader = loaders['forget'],
+            retain_loader = loaders['retain'],
+            device        = device,
+            epochs        = 10,
+            lr            = 5e-4,
+            alpha         = 0.5,
+        )
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     print("\n[Evaluating GP-Unlearn] …")
@@ -300,17 +311,19 @@ def main():
     else:
         print(f"[WARNING] Week 3 results not found: {W3_RESULTS_PATH}")
 
-    retrain_ref = week2.get('retrain', {
+    # Keys in the JSON files use display names (e.g. 'Retrain', 'Fine-tune')
+    retrain_ref = week3.get('Retrain', week2.get('Retrain', {
         'Acc_Dr': 98.32, 'Acc_Df': 0.0, 'Acc_val': 79.76, 'MIA': 53.90
-    })
+    }))
 
     all_results = {}
-    for key, label in [('original', 'Original'), ('retrain', 'Retrain (gold std)'),
-                       ('finetune', 'Fine-tune'), ('neggrad', 'NegGrad')]:
-        if key in week2:
-            all_results[label] = week2[key]
-    if 'dkf' in week3:
-        all_results['DKF (Ours)'] = week3['dkf']
+    for key, label in [('Original', 'Original'), ('Retrain', 'Retrain (gold std)'),
+                       ('Fine-tune', 'Fine-tune'), ('NegGrad', 'NegGrad')]:
+        src = week3 if key in week3 else week2
+        if key in src:
+            all_results[label] = src[key]
+    if 'DKF (Ours)' in week3:
+        all_results['DKF (Ours)'] = week3['DKF (Ours)']
     all_results['GP-Unlearn (Ours)'] = gp_metrics
 
     # ── Print comparison table ─────────────────────────────────────────────────

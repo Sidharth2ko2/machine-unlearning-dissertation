@@ -99,7 +99,7 @@ def extract_latents(vae, class_indices, device, max_per_class=200):
 
 def run_tsne(embeddings, seed=42):
     print("  Running t-SNE …", end=' ', flush=True)
-    tsne = TSNE(n_components=2, perplexity=30, n_iter=1200,
+    tsne = TSNE(n_components=2, perplexity=30, max_iter=1200,
                 learning_rate='auto', init='pca', random_state=seed)
     out = tsne.fit_transform(embeddings)
     print("done")
@@ -177,8 +177,8 @@ def main():
     pad = 3
     rect_x = x_airplane[:, 0].min() - pad
     rect_y = x_airplane[:, 1].min() - pad
-    rect_w = x_airplane[:, 0].ptp() + 2 * pad
-    rect_h = x_airplane[:, 1].ptp() + 2 * pad
+    rect_w = (x_airplane[:, 0].max() - x_airplane[:, 0].min()) + 2 * pad
+    rect_h = (x_airplane[:, 1].max() - x_airplane[:, 1].min()) + 2 * pad
     axes[1].add_patch(plt.Rectangle(
         (rect_x, rect_y), rect_w, rect_h,
         fill=False, edgecolor='#e74c3c', linewidth=1.8,

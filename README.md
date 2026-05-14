@@ -518,14 +518,26 @@ Best λ_align is selected by lowest **Avg.Gap**. Typical trade-off:
 
 These metrics directly demonstrate the RA-DKF claim: adding L_align reduces Retain_Feature_Drift compared to base DKF, especially for forget-adjacent classes (bird, ship) that share structural features with airplane.
 
-### Expected Result Direction
+### Actual Results
 
-| Method | Acc_Dr | Acc_Df | Avg.Gap | Retain_Feature_Cosine |
-|--------|--------|--------|---------|----------------------|
-| DKF | 94.18% | 2.26% | 2.65% | baseline |
-| RA-DKF (λ=0.1) | ↑ higher | ≈ same | ↓ lower | ↑ higher |
-| RA-DKF (λ=0.5) | ↑ higher | ≈ same | ↓ lower | ↑↑ higher |
-| RA-DKF (λ=1.0) | ↑ higher | may rise slightly | comparable | ↑↑↑ higher |
+Experiments run with λ_align ∈ {0.1, 0.5, 1.0}. Results from `results/week6_7_ra_dkf_results.json`:
+
+| Method | Acc_Dr (↑) | Acc_Df (↓) | Acc_val (↑) | MIA (↓) | Retain_Feature_Cosine (↑) | Retain_Feature_Drift (↓) | Retain_ARI (↑) | Avg.Gap (↓) |
+|--------|-----------|-----------|------------|--------|--------------------------|--------------------------|---------------|------------|
+| DKF (baseline) | 94.17% | 2.24% | 76.36% | 51.70% | 0.912 | 0.088 | 0.904 | **2.58%** |
+| RA-DKF λ=0.1 | 94.26% | 1.90% | 76.11% | 55.60% | 0.889 | 0.111 | 0.872 | 3.51% |
+| RA-DKF λ=0.5 | 94.59% | 3.42% | 76.68% | 54.15% | 0.904 | 0.096 | 0.896 | 3.30% |
+| RA-DKF λ=1.0 | 93.56% | 5.64% | 76.30% | 52.60% | 0.891 | 0.109 | 0.844 | 3.82% |
+
+### Key Findings
+
+**RA-DKF did not improve Avg.Gap over base DKF** (all λ variants score higher = worse). The alignment loss introduced the following trade-offs:
+
+- **λ=0.5** gives the best Acc_Dr (94.59%) and Acc_val (76.68%) of all RA-DKF variants — the alignment loss does anchor retain-class predictions — but MIA worsens (54.15% vs 51.70% for DKF).
+- **Retain_Feature_Cosine did not improve**: all RA-DKF variants show *lower* cosine similarity than base DKF. This suggests the L_align MSE term is not effectively reducing feature drift in this configuration — the extra loss may be interfering with the KL forget signal and disrupting the representation geometry rather than stabilising it.
+- **Increasing λ worsens Acc_Df** (1.90% → 3.42% → 5.64%) indicating the alignment constraint competes with the forgetting objective: anchoring retain features too strongly prevents the student from fully remapping forget-class representations.
+
+**Conclusion:** The representation-alignment hypothesis is correct in principle (feature drift is measurable and meaningful), but a simple normalised MSE on avgpool features is not the right implementation. Future work should explore layer-selective alignment (aligning only early/shared layers), or a contrastive alignment term that attracts retain features while repelling forget features.
 
 ### Week 6-7 Summary
 
@@ -536,6 +548,7 @@ These metrics directly demonstrate the RA-DKF claim: adding L_align reduces Reta
 | λ_align sweep | ✅ | 0.1 / 0.5 / 1.0 tested in one run |
 | Representation metrics | ✅ | Feature cosine, drift, agreement, KL, ARI/NMI |
 | Bug fixed | ✅ | feature_drift_metrics processes teacher+student on same batches |
+| Results evaluated | ✅ | RA-DKF improves Acc_Dr at λ=0.5 but increases Avg.Gap; alignment hypothesis needs refinement |
 
 ---
 
@@ -573,9 +586,12 @@ machine-unlearning-dissertation/
 │   └── results/             # JSON results output — not tracked in git
 │
 ├── week5_analysis/
-│   ├── projection_unlearning.py      # GP-Unlearn: gradient projection baseline
-│   ├── visualize_disentanglement.py  # t-SNE of β-VAE S and U latent spaces
-│   └── visualize_shared_knowledge.py # Counterfactual grid + cosine similarity panels
+│   ├── projection_unlearning.py        # GP-Unlearn: gradient projection baseline
+│   ├── visualize_disentanglement.py    # t-SNE of β-VAE S and U latent spaces
+│   ├── visualize_shared_knowledge.py   # Counterfactual grid + cosine similarity panels
+│   ├── visualize_best_image_story.py   # Full disentanglement story: original → recon → S → U → mixed
+│   ├── visualize_image_decomposition.py# Per-image S/U decomposition panel
+│   └── visualize_su_decomposition.py   # Grid comparing S and U reconstructions across classes
 │
 ├── week6_7_novelty/
 │   ├── ra_dkf.py                     # RA-DKF training (DKF + L_align)
