@@ -4,6 +4,12 @@ results/
 !week6_7_novelty/results/
 week6_7_novelty/results/*
 !week6_7_novelty/results/*.json
+!week8_enhanced_radkf/results/
+week8_enhanced_radkf/results/*
+!week8_enhanced_radkf/results/*.json
+!week9_cifar100_resnet50/results/
+week9_cifar100_resnet50/results/*
+!week9_cifar100_resnet50/results/*.json
 __pycache__/
 *.pyc
 .DS_Store
